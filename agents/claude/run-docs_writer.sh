@@ -95,7 +95,7 @@ Do not call register_agent, get_next_task, create_branch, or setup_worktree for 
 Write or update documentation in "$worktree_dir".
 Call record_commit after each commit you make.
 Call set_output_path for the docs file or files you produced.
-When documentation is complete, call update_task_status with status "done" and a concise summary.
+When documentation is complete, call update_task_status with status "${MANDATUM_SUCCESS_STATUS:-done}" and a concise summary.
 Call heartbeat while working.
 EOF
 )"

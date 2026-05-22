@@ -1,16 +1,14 @@
 import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { fetchTask, fetchCommits, fetchAgents, fetchTasks, updateTask, deleteTask, resetTask } from '../api'
-import { Task, TaskStatus, TaskPriority, AgentRole, Agent, GIT_ACTIONS } from '../types'
+import { fetchTask, fetchCommits, fetchAgents, fetchTasks, updateTask, deleteTask, resetTask, fetchInfo } from '../api'
+import { Task, TaskStatus, TaskPriority, AgentRole, Agent, GIT_ACTIONS, PipelineStage } from '../types'
 import AgentBadge from './AgentBadge'
 import { PRIORITY_CONFIG } from './TaskCard'
 import { formatDistanceToNow } from 'date-fns'
 import { X, Copy, Pencil, Trash2, ChevronDown, GitBranch, GitCommit, ExternalLink, FolderOpen, AlertTriangle, RotateCcw, Link, CheckCircle2, Clock } from 'lucide-react'
 
-const STATUSES: TaskStatus[] = ['backlog', 'in_progress', 'in_review', 'testing', 'docs_needed', 'done', 'blocked']
 const PRIORITIES: TaskPriority[] = ['low', 'medium', 'high', 'critical']
-const ROLES: AgentRole[] = ['coder', 'reviewer', 'tester', 'docs_writer']
 
 const ACTION_ICON: Record<string, string> = {
   branch_created:    '⎇',
@@ -65,6 +63,13 @@ export default function TaskModal({ task: initialTask, onClose }: TaskModalProps
     queryKey: ['tasks'],
     queryFn: () => fetchTasks(),
   })
+
+  const { data: info } = useQuery({
+    queryKey: ['info'],
+    queryFn: fetchInfo,
+    staleTime: Infinity,
+  })
+  const pipeline: PipelineStage[] = info?.pipeline ?? []
 
   const assignedAgent = task.assigned_agent_id
     ? (agents as Agent[]).find(a => a.agent_id === task.assigned_agent_id)
@@ -176,7 +181,7 @@ export default function TaskModal({ task: initialTask, onClose }: TaskModalProps
                   <select value={editForm.assigned_role} onChange={e => setEditForm(f => ({ ...f, assigned_role: e.target.value as AgentRole | '' }))}
                     className="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm text-white outline-none">
                     <option value="">No role</option>
-                    {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+                    {pipeline.map(s => <option key={s.role} value={s.role}>{s.role.replace(/_/g, ' ')}</option>)}
                   </select>
                 </>
               ) : (
@@ -198,10 +203,10 @@ export default function TaskModal({ task: initialTask, onClose }: TaskModalProps
                           className="block w-full text-left px-3 py-1.5 text-sm text-slate-400 hover:text-white hover:bg-slate-700">
                           No role
                         </button>
-                        {ROLES.map(r => (
-                          <button key={r} onClick={() => handleRoleChange(r)}
+                        {pipeline.map(s => (
+                          <button key={s.role} onClick={() => handleRoleChange(s.role)}
                             className="block w-full text-left px-3 py-1.5 text-sm text-slate-300 hover:text-white hover:bg-slate-700 capitalize">
-                            {r.replace(/_/g, ' ')}
+                            {s.role.replace(/_/g, ' ')}
                           </button>
                         ))}
                       </div>
@@ -220,7 +225,8 @@ export default function TaskModal({ task: initialTask, onClose }: TaskModalProps
                   </button>
                   {showStatusMenu && (
                     <div className="absolute right-0 top-full mt-1 bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-10 py-1 min-w-[9rem]">
-                      {STATUSES.filter(s => s !== task.status).map(s => (
+                      {(['backlog', ...pipeline.map(s => s.role), 'done', 'blocked'] as TaskStatus[])
+                        .filter(s => s !== task.status).map(s => (
                         <button key={s} onClick={() => handleStatusChange(s)}
                           className="block w-full text-left px-3 py-1.5 text-sm text-slate-300 hover:text-white hover:bg-slate-700 capitalize">
                           {s.replace(/_/g, ' ')}

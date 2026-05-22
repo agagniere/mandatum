@@ -20,6 +20,7 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 use tracing_subscriber::EnvFilter;
 
+use config::MandatumConfig;
 use db::Database;
 use metrics::Metrics;
 use sse::SseBroadcaster;
@@ -32,6 +33,7 @@ pub struct AppState {
     pub base_branch: String,
     pub metrics: Arc<Metrics>,
     pub log_dir: Option<std::path::PathBuf>,
+    pub config: Option<Arc<MandatumConfig>>,
 }
 
 struct Config {
@@ -147,9 +149,9 @@ async fn main() {
     let cfg = Config::from_args();
 
     // Load YAML config if available
-    let mandatum_cfg = cfg.config_path.as_deref().map(|path| {
+    let mandatum_cfg: Option<Arc<MandatumConfig>> = cfg.config_path.as_deref().map(|path| {
         match config::MandatumConfig::from_file(path) {
-            Ok(c) => { tracing::info!("Config       → {}", path); c }
+            Ok(c) => { tracing::info!("Config       → {}", path); Arc::new(c) }
             Err(e) => { eprintln!("Error loading config {}: {}", path, e); std::process::exit(1) }
         }
     });
@@ -177,6 +179,7 @@ async fn main() {
         base_branch: cfg.base_branch.clone(),
         metrics,
         log_dir: log_dir_opt,
+        config: mandatum_cfg.clone(),
     });
 
     let cors = CorsLayer::new()
@@ -209,7 +212,7 @@ async fn main() {
     // Start agent spawner if config is loaded
     if let Some(cfg_data) = mandatum_cfg {
         let sp = Arc::new(spawner::Spawner::new(
-            Arc::new(cfg_data),
+            cfg_data,
             state.clone(),
             log_dir,
         ));
@@ -539,9 +542,21 @@ async fn reset_task_handler(
 }
 
 async fn info_handler(State(s): State<Arc<AppState>>) -> impl IntoResponse {
+    let pipeline: Vec<serde_json::Value> = s.config.as_deref()
+        .map(|c| c.agents.iter().map(|a| serde_json::json!({
+            "role": a.role,
+            "transition": { "success": a.transition.success, "failure": a.transition.failure }
+        })).collect())
+        .unwrap_or_else(|| vec![
+            serde_json::json!({"role": "coder",       "transition": {"success": "reviewer",    "failure": null}}),
+            serde_json::json!({"role": "reviewer",    "transition": {"success": "tester",      "failure": "coder"}}),
+            serde_json::json!({"role": "tester",      "transition": {"success": "docs_writer", "failure": "coder"}}),
+            serde_json::json!({"role": "docs_writer", "transition": {"success": "done",        "failure": null}}),
+        ]);
     Json(serde_json::json!({
         "repo_path": s.repo_path,
         "base_branch": s.base_branch,
+        "pipeline": pipeline,
     }))
 }
 

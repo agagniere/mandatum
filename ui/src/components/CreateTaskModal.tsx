@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { createTask, fetchTasks } from '../api'
+import { createTask, fetchTasks, fetchInfo } from '../api'
 import { TaskPriority, AgentRole } from '../types'
 import { X, PlusCircle } from 'lucide-react'
 
@@ -24,6 +24,13 @@ export default function CreateTaskModal({ onClose }: CreateTaskModalProps) {
     queryKey: ['tasks'],
     queryFn: () => fetchTasks(),
   })
+
+  const { data: info } = useQuery({
+    queryKey: ['info'],
+    queryFn: fetchInfo,
+    staleTime: Infinity,
+  })
+  const pipeline = info?.pipeline ?? []
 
   const mutation = useMutation({
     mutationFn: () => createTask({
@@ -100,14 +107,15 @@ export default function CreateTaskModal({ onClose }: CreateTaskModalProps) {
               </select>
             </div>
             <div>
-              <label className="text-xs text-slate-500 uppercase font-medium block mb-1">Assign to</label>
+              <label className="text-xs text-slate-500 uppercase font-medium block mb-1">Place in</label>
               <select value={form.assigned_role} onChange={e => setForm(f => ({ ...f, assigned_role: e.target.value as AgentRole | '' }))}
                 className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white outline-none">
-                <option value="">No role</option>
-                <option value="coder">Coder</option>
-                <option value="reviewer">Reviewer</option>
-                <option value="tester">Tester</option>
-                <option value="docs_writer">Docs Writer</option>
+                <option value="">Backlog</option>
+                {pipeline.map(s => (
+                  <option key={s.role} value={s.role}>
+                    {s.role.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
+                  </option>
+                ))}
               </select>
             </div>
           </div>

@@ -1,4 +1,4 @@
-import { Task, TaskStatus, TaskPriority, AgentRole, Agent, Stats, ActivityEntry } from './types'
+import { Task, TaskStatus, TaskPriority, AgentRole, Agent, Stats, ActivityEntry, PipelineStage } from './types'
 
 const BASE = '/api'
 
@@ -108,9 +108,9 @@ export async function unstopAgent(id: string): Promise<Agent> {
   return res.json()
 }
 
-export async function fetchInfo(): Promise<{ repo_path: string | null; base_branch: string }> {
+export async function fetchInfo(): Promise<{ repo_path: string | null; base_branch: string; pipeline: PipelineStage[] }> {
   const res = await fetch(`${BASE}/info`)
-  if (!res.ok) return { repo_path: null, base_branch: 'master' }
+  if (!res.ok) return { repo_path: null, base_branch: 'master', pipeline: [] }
   return res.json()
 }
 

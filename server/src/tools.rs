@@ -1,5 +1,6 @@
 use serde_json::Value;
 use std::sync::Arc;
+use crate::config::MandatumConfig;
 use crate::db::{Database, suggest_branch};
 use crate::metrics::Metrics;
 use crate::sse::SseBroadcaster;
@@ -11,6 +12,7 @@ pub struct ToolContext {
     pub repo_path: Option<String>,
     pub base_branch: String,
     pub metrics: Arc<Metrics>,
+    pub config: Option<Arc<MandatumConfig>>,
 }
 
 pub async fn handle_tool_call(
@@ -408,8 +410,11 @@ async fn request_review(args: Value, ctx: &ToolContext) -> Result<Value, String>
         }
     }
 
+    let next_status = ctx.config.as_deref()
+        .and_then(|c| c.success_for("coder"))
+        .unwrap_or("reviewer");
     let task = ctx.db.update_task(
-        task_id, None, None, Some("in_review"), None, None, None, None, None,
+        task_id, None, None, Some(next_status), None, None, None, None, None,
         None, None, commit_hash, None, None, None,
     ).await.map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Task {} not found", task_id))?;
@@ -491,8 +496,11 @@ async fn approve_review(args: Value, ctx: &ToolContext) -> Result<Value, String>
     let task_id = args["task_id"].as_str().ok_or("Missing task_id")?;
     let comment = args["comment"].as_str().unwrap_or("LGTM");
 
+    let next_status = ctx.config.as_deref()
+        .and_then(|c| c.success_for("reviewer"))
+        .unwrap_or("tester");
     let task = ctx.db.update_task(
-        task_id, None, None, Some("testing"), None, None, None, None, None,
+        task_id, None, None, Some(next_status), None, None, None, None, None,
         None, None, None, None, None, None,
     ).await.map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Task {} not found", task_id))?;
@@ -507,7 +515,7 @@ async fn approve_review(args: Value, ctx: &ToolContext) -> Result<Value, String>
     ctx.metrics.review_approved();
     broadcast(ctx, "task_updated", &serde_json::json!(task));
     broadcast(ctx, "activity_added", &serde_json::json!(entry));
-    Ok(serde_json::json!({"message": "Review approved, task moved to testing", "task": task}))
+    Ok(serde_json::json!({"message": format!("Review approved, task moved to {}", next_status), "task": task}))
 }
 
 /// Reviewer requests changes — requeues for coder, clears reviewer assignment.
@@ -530,6 +538,9 @@ async fn request_changes(args: Value, ctx: &ToolContext) -> Result<Value, String
         })
         .unwrap_or(0);
 
+    let failure_role = ctx.config.as_deref()
+        .and_then(|c| c.failure_for("reviewer"))
+        .unwrap_or("coder");
     let (new_status, new_role, message) = if prior_rejections >= MAX_REVIEW_CYCLES {
         (
             "blocked",
@@ -542,9 +553,9 @@ async fn request_changes(args: Value, ctx: &ToolContext) -> Result<Value, String
         )
     } else {
         (
-            "backlog",
-            Some("coder"),
-            format!("Changes requested, task moved to backlog for coder and reviewer unassigned"),
+            failure_role,
+            Some(failure_role),
+            format!("Changes requested, task returned to {} and reviewer unassigned", failure_role),
         )
     };
 
@@ -639,7 +650,7 @@ pub fn tool_definitions() -> serde_json::Value {
                 "type": "object",
                 "properties": {
                     "agent_id": {"type": "string"},
-                    "role": {"type": "string", "enum": ["coder","reviewer","tester","docs_writer"]}
+                    "role": {"type": "string"}
                 },
                 "required": ["agent_id","role"]
             }
@@ -651,7 +662,7 @@ pub fn tool_definitions() -> serde_json::Value {
                 "type": "object",
                 "properties": {
                     "agent_id": {"type": "string"},
-                    "role": {"type": "string", "enum": ["coder","reviewer","tester","docs_writer"]}
+                    "role": {"type": "string"}
                 },
                 "required": ["agent_id","role"]
             }
@@ -756,7 +767,7 @@ pub fn tool_definitions() -> serde_json::Value {
                 "properties": {
                     "agent_id": {"type": "string"},
                     "task_id": {"type": "string"},
-                    "status": {"type": "string", "enum": ["backlog","in_progress","in_review","testing","docs_needed","done","blocked"]},
+                    "status": {"type": "string"},
                     "note": {"type": "string"}
                 },
                 "required": ["agent_id","task_id","status"]
@@ -785,7 +796,7 @@ pub fn tool_definitions() -> serde_json::Value {
                     "title": {"type": "string"},
                     "description": {"type": "string"},
                     "priority": {"type": "string", "enum": ["low","medium","high","critical"]},
-                    "assigned_role": {"type": "string", "enum": ["coder","reviewer","tester","docs_writer"]},
+                    "assigned_role": {"type": "string"},
                     "tags": {"type": "array", "items": {"type": "string"}},
                     "dependencies": {"type": "array", "items": {"type": "string"}, "description": "Task IDs that must be in Done status before this task can be assigned to an agent"}
                 },

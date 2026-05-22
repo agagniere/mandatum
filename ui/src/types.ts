@@ -1,6 +1,11 @@
-export type TaskStatus = 'backlog' | 'in_progress' | 'in_review' | 'testing' | 'docs_needed' | 'done' | 'blocked'
+export type TaskStatus = string
 export type TaskPriority = 'low' | 'medium' | 'high' | 'critical'
-export type AgentRole = 'coder' | 'reviewer' | 'tester' | 'docs_writer'
+export type AgentRole = string
+
+export interface PipelineStage {
+  role: string
+  transition: { success: string | null; failure: string | null }
+}
 
 export interface Task {
   id: string

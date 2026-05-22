@@ -1,27 +1,49 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { fetchTasks, fetchAgents, updateTask } from '../api'
-import { Task, TaskStatus, Agent } from '../types'
+import { fetchTasks, fetchAgents, fetchInfo, updateTask } from '../api'
+import { Task, TaskStatus, Agent, PipelineStage } from '../types'
 import TaskCard from './TaskCard'
 import TaskModal from './TaskModal'
 
-const COLUMNS: { status: TaskStatus; label: string }[] = [
-  { status: 'backlog',     label: 'Coder'       },
-  { status: 'in_review',   label: 'In Review'   },
-  { status: 'testing',     label: 'Testing'     },
-  { status: 'docs_needed', label: 'Docs Needed' },
-  { status: 'done',        label: 'Done'        },
-  { status: 'blocked',     label: 'Blocked'     },
+// Fixed non-role columns that always appear
+const PREFIX_COLUMNS = [{ status: 'backlog', label: 'Backlog' }]
+const SUFFIX_COLUMNS = [
+  { status: 'done',    label: 'Done'    },
+  { status: 'blocked', label: 'Blocked' },
 ]
 
-const COLUMN_ACCENT: Record<TaskStatus, string> = {
-  backlog:     'border-t-slate-500',
-  in_progress: 'border-t-slate-500',
-  in_review:   'border-t-purple-500',
-  testing:     'border-t-amber-500',
-  docs_needed: 'border-t-green-500',
-  done:        'border-t-emerald-500',
-  blocked:     'border-t-red-500',
+// Cycle through a simple palette for pipeline role columns
+const ROLE_ACCENT_PALETTE = [
+  'border-t-blue-500',
+  'border-t-purple-500',
+  'border-t-amber-500',
+  'border-t-green-500',
+  'border-t-cyan-500',
+  'border-t-rose-500',
+  'border-t-indigo-500',
+]
+
+const FIXED_ACCENT: Record<string, string> = {
+  backlog: 'border-t-slate-500',
+  done:    'border-t-emerald-500',
+  blocked: 'border-t-red-500',
+}
+
+function accentFor(status: string, roleIndex: number): string {
+  return FIXED_ACCENT[status] ?? ROLE_ACCENT_PALETTE[roleIndex % ROLE_ACCENT_PALETTE.length]
+}
+
+function columnsFromPipeline(pipeline: PipelineStage[]) {
+  const roles = pipeline.map((s, i) => ({
+    status: s.role,
+    label: s.role.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+    accentIndex: i,
+  }))
+  return [
+    ...PREFIX_COLUMNS.map(c => ({ ...c, accentIndex: -1 })),
+    ...roles,
+    ...SUFFIX_COLUMNS.map(c => ({ ...c, accentIndex: -1 })),
+  ]
 }
 
 interface BoardProps {
@@ -45,6 +67,15 @@ export default function Board({ onTaskSelect, selectedTask }: BoardProps) {
     refetchInterval: 15_000,
   })
 
+  const { data: info } = useQuery({
+    queryKey: ['info'],
+    queryFn: fetchInfo,
+    staleTime: Infinity,
+  })
+
+  const pipeline: PipelineStage[] = info?.pipeline ?? []
+  const columns = columnsFromPipeline(pipeline)
+
   const agentMap = Object.fromEntries((agents as Agent[]).map(a => [a.agent_id, a]))
 
   const updateMutation = useMutation({
@@ -56,16 +87,21 @@ export default function Board({ onTaskSelect, selectedTask }: BoardProps) {
     },
   })
 
+  // Build a set of known column statuses so tasks with unknown statuses land in a catch-all
+  const knownStatuses = new Set(columns.map(c => c.status))
   const tasksByStatus = Object.fromEntries(
-    COLUMNS.map(col => [
+    columns.map(col => [
       col.status,
-      tasks.filter(t =>
-        t.status === col.status ||
-        // in_progress tasks live in the Coder column
-        (col.status === 'backlog' && t.status === 'in_progress')
-      ),
+      tasks.filter(t => t.status === col.status),
     ])
-  ) as Record<TaskStatus, Task[]>
+  ) as Record<string, Task[]>
+
+  // Tasks with statuses not in any column go into backlog as a safety net
+  for (const task of tasks) {
+    if (!knownStatuses.has(task.status)) {
+      tasksByStatus['backlog'] = [...(tasksByStatus['backlog'] ?? []), task]
+    }
+  }
 
   const handleDragStart = (e: React.DragEvent, taskId: string) => {
     setDraggedTaskId(taskId)
@@ -91,13 +127,14 @@ export default function Board({ onTaskSelect, selectedTask }: BoardProps) {
   return (
     <>
       <div className="flex gap-3 h-full overflow-x-auto p-4 pb-6">
-        {COLUMNS.map(({ status, label }) => {
+        {columns.map(({ status, label, accentIndex }) => {
           const col = tasksByStatus[status] ?? []
           const isDragOver = dragOverColumn === status
+          const accent = accentFor(status, accentIndex)
           return (
             <div
               key={status}
-              className={`flex flex-col w-60 shrink-0 rounded-lg border-t-2 ${COLUMN_ACCENT[status]} bg-slate-900 border border-slate-800 transition-colors duration-150 ${isDragOver ? 'ring-1 ring-indigo-500 bg-slate-800' : ''}`}
+              className={`flex flex-col w-60 shrink-0 rounded-lg border-t-2 ${accent} bg-slate-900 border border-slate-800 transition-colors duration-150 ${isDragOver ? 'ring-1 ring-indigo-500 bg-slate-800' : ''}`}
               onDragOver={e => { e.preventDefault(); setDragOverColumn(status) }}
               onDragLeave={() => setDragOverColumn(null)}
               onDrop={e => handleDrop(e, status)}

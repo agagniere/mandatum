@@ -167,6 +167,7 @@ async fn dispatch(
                 repo_path: state.repo_path.clone(),
                 base_branch: state.base_branch.clone(),
                 metrics: state.metrics.clone(),
+                config: state.config.clone(),
             };
 
             let response = match handle_tool_call(&name, arguments, &ctx).await {

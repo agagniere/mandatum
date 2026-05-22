@@ -1,12 +1,18 @@
 use serde::Deserialize;
-use std::collections::HashMap;
 
 const DEFAULT_MAX_CONCURRENT: usize = 5;
 const DEFAULT_RUNTIME: &str = "bash";
 const DEFAULT_DOCKER_IMAGE: &str = "mandatum-agent:latest";
 
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct Transition {
+    pub success: Option<String>,
+    pub failure: Option<String>,
+}
+
 #[derive(Deserialize, Clone, Debug)]
 pub struct AgentRoleConfig {
+    pub role: String,
     #[serde(rename = "type", default = "default_agent_type")]
     pub agent_type: String,
     pub additional_instructions: Option<String>,
@@ -16,31 +22,16 @@ pub struct AgentRoleConfig {
     pub model: Option<String>,
     /// Claude effort level (`low`, `medium`, `high`, `xhigh`, `max`).
     pub effort: Option<String>,
+    #[serde(default)]
+    pub transition: Transition,
 }
 
-fn default_agent_type() -> String {
-    "claude".to_string()
-}
-
-fn default_agents_dir() -> String {
-    "agents".to_string()
-}
-
-fn default_max_concurrent() -> usize {
-    DEFAULT_MAX_CONCURRENT
-}
-
-fn default_caveman() -> bool {
-    true
-}
-
-fn default_runtime() -> String {
-    DEFAULT_RUNTIME.to_string()
-}
-
-fn default_docker_image() -> String {
-    DEFAULT_DOCKER_IMAGE.to_string()
-}
+fn default_agent_type() -> String { "claude".to_string() }
+fn default_agents_dir() -> String { "agents".to_string() }
+fn default_max_concurrent() -> usize { DEFAULT_MAX_CONCURRENT }
+fn default_caveman() -> bool { true }
+fn default_runtime() -> String { DEFAULT_RUNTIME.to_string() }
+fn default_docker_image() -> String { DEFAULT_DOCKER_IMAGE.to_string() }
 
 #[derive(Deserialize, Clone, Debug, Default)]
 pub struct MandatumConfig {
@@ -58,15 +49,14 @@ pub struct MandatumConfig {
     /// Shell command whose stdout is forwarded to the agent as
     /// `ANTHROPIC_AUTH_TOKEN`. Run once per spawn so tokens are always fresh.
     pub auth_token_helper: Option<String>,
-    /// Multi-line headers forwarded as `ANTHROPIC_CUSTOM_HEADERS`. Use YAML
-    /// `|` block scalar for newlines (e.g. gateway routing headers).
+    /// Multi-line headers forwarded as `ANTHROPIC_CUSTOM_HEADERS`.
     pub anthropic_custom_headers: Option<String>,
     /// Default claude model — overridden by per-role `model`.
     pub model: Option<String>,
     /// Default claude effort level — overridden by per-role `effort`.
     pub effort: Option<String>,
     #[serde(default)]
-    pub agents: HashMap<String, AgentRoleConfig>,
+    pub agents: Vec<AgentRoleConfig>,
 }
 
 impl MandatumConfig {
@@ -75,44 +65,57 @@ impl MandatumConfig {
         Ok(serde_yaml::from_str(&content)?)
     }
 
+    pub fn role_config(&self, role: &str) -> Option<&AgentRoleConfig> {
+        self.agents.iter().find(|a| a.role == role)
+    }
+
+    /// The first role in the pipeline — used as the default status for new tasks.
+    pub fn first_role(&self) -> Option<&str> {
+        self.agents.first().map(|a| a.role.as_str())
+    }
+
+    /// Status to set when this role's agent succeeds.
+    pub fn success_for(&self, role: &str) -> Option<&str> {
+        self.role_config(role)?.transition.success.as_deref()
+    }
+
+    /// Status to set when this role's agent fails / requests changes.
+    pub fn failure_for(&self, role: &str) -> Option<&str> {
+        self.role_config(role)?.transition.failure.as_deref()
+    }
+
     pub fn agent_type(&self, role: &str) -> &str {
-        self.agents
-            .get(role)
+        self.role_config(role)
             .map(|a| a.agent_type.as_str())
             .unwrap_or("claude")
     }
 
     pub fn additional_instructions(&self, role: &str) -> &str {
-        self.agents
-            .get(role)
+        self.role_config(role)
             .and_then(|a| a.additional_instructions.as_deref())
             .unwrap_or("")
     }
 
     pub fn max_concurrent_for_role(&self, role: &str) -> usize {
-        self.agents
-            .get(role)
+        self.role_config(role)
             .and_then(|a| a.max_concurrent)
             .unwrap_or(self.max_concurrent)
     }
 
     pub fn caveman_for_role(&self, role: &str) -> bool {
-        self.agents
-            .get(role)
+        self.role_config(role)
             .and_then(|a| a.caveman)
             .unwrap_or(self.caveman)
     }
 
     pub fn model_for_role(&self, role: &str) -> Option<String> {
-        self.agents
-            .get(role)
+        self.role_config(role)
             .and_then(|a| a.model.clone())
             .or_else(|| self.model.clone())
     }
 
     pub fn effort_for_role(&self, role: &str) -> Option<String> {
-        self.agents
-            .get(role)
+        self.role_config(role)
             .and_then(|a| a.effort.clone())
             .or_else(|| self.effort.clone())
     }

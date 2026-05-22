@@ -114,16 +114,6 @@ pub fn suggest_branch(task_id: &str, title: &str) -> String {
     format!("feature/{}-{}", short_id, branch_slug(title))
 }
 
-fn queue_status_for_role(role: Option<&str>) -> &'static str {
-    match role {
-        Some("coder") => "backlog",
-        Some("reviewer") => "in_review",
-        Some("tester") => "testing",
-        Some("docs_writer") => "docs_needed",
-        _ => "backlog",
-    }
-}
-
 fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<Task> {
     let tags_str: String = row.get::<_, String>(10).unwrap_or_else(|_| "[]".to_string());
     let tags: Vec<String> = serde_json::from_str(&tags_str).unwrap_or_default();
@@ -225,6 +215,12 @@ impl Database {
             let _ = conn.execute("ALTER TABLE tasks ADD COLUMN dependencies TEXT DEFAULT '[]'", []);
             let _ = conn.execute("ALTER TABLE agents ADD COLUMN stop_requested INTEGER NOT NULL DEFAULT 0", []);
             let _ = conn.execute("ALTER TABLE tasks ADD COLUMN claimed_at TEXT", []);
+            // Migrate old hardcoded in-pipeline status names to role names (idempotent).
+            // 'backlog' is kept as the pre-pipeline inbox; only active-pipeline statuses change.
+            let _ = conn.execute("UPDATE tasks SET status = 'coder' WHERE status = 'in_progress'", []);
+            let _ = conn.execute("UPDATE tasks SET status = 'reviewer' WHERE status = 'in_review'", []);
+            let _ = conn.execute("UPDATE tasks SET status = 'tester' WHERE status = 'testing'", []);
+            let _ = conn.execute("UPDATE tasks SET status = 'docs_writer' WHERE status = 'docs_needed'", []);
             Ok(())
         }).await
     }
@@ -457,7 +453,7 @@ impl Database {
             id: id.clone(),
             title: title.to_string(),
             description: description.map(|s| s.to_string()),
-            status: queue_status_for_role(assigned_role).to_string(),
+            status: assigned_role.unwrap_or("backlog").to_string(),
             assigned_role: assigned_role.map(|s| s.to_string()),
             assigned_agent_id: None,
             priority: priority.to_string(),
@@ -847,13 +843,7 @@ impl Database {
         let agent_id = agent_id.to_string();
         let role = role.to_string();
 
-        let target_status = match role.as_str() {
-            "coder"       => "backlog",
-            "reviewer"    => "in_review",
-            "tester"      => "testing",
-            "docs_writer" => "docs_needed",
-            _ => return Ok(None),
-        }.to_string();
+        let target_status = role.clone();
 
         self.conn.call(move |conn| {
             // Exclude tasks whose dependencies are not all done.
@@ -876,9 +866,9 @@ impl Database {
                 None => Ok(None),
                 Some(tid) => {
                     let now = Utc::now().to_rfc3339();
-                    // Coders move tasks to in_progress; other roles keep the task
-                    // in their role-specific column status (in_review, testing, etc.)
-                    let claimed_status = if role == "coder" { "in_progress" } else { target_status.as_str() };
+                    // Status stays as the role name while the agent holds it;
+                    // assigned_agent_id distinguishes "waiting" from "active".
+                    let claimed_status = target_status.as_str();
                     conn.execute(
                         "UPDATE tasks SET assigned_agent_id = ?1, assigned_role = ?2, status = ?3, updated_at = ?4, claimed_at = ?4 WHERE id = ?5",
                         params![agent_id, role, claimed_status, now, tid],
@@ -920,10 +910,10 @@ impl Database {
                 Ok((row.get(0)?, row.get(1)?))
             })?.collect::<Result<Vec<_>, _>>()?;
 
-            for (id, assigned_role) in &stale {
+            for (id, _) in &stale {
                 conn.execute(
-                    "UPDATE tasks SET status = ?1, assigned_agent_id = NULL, updated_at = ?2 WHERE id = ?3",
-                    params![queue_status_for_role(assigned_role.as_deref()), now, id],
+                    "UPDATE tasks SET status = COALESCE(assigned_role, 'backlog'), assigned_agent_id = NULL, updated_at = ?1 WHERE id = ?2",
+                    params![now, id],
                 )?;
             }
             Ok(stale.into_iter().map(|(id, _)| id).collect())
@@ -934,14 +924,9 @@ impl Database {
         let id = id.to_string();
         let now = Utc::now().to_rfc3339();
         self.conn.call(move |conn| {
-            let assigned_role: Option<String> = conn.query_row(
-                "SELECT assigned_role FROM tasks WHERE id = ?1",
-                params![id.clone()],
-                |row| row.get(0),
-            ).optional()?.flatten();
             conn.execute(
-                "UPDATE tasks SET status = ?1, assigned_agent_id = NULL, updated_at = ?2 WHERE id = ?3",
-                params![queue_status_for_role(assigned_role.as_deref()), now, id],
+                "UPDATE tasks SET status = COALESCE(assigned_role, 'backlog'), assigned_agent_id = NULL, updated_at = ?1 WHERE id = ?2",
+                params![now, id],
             )?;
             Ok(conn.query_row(
                 &format!("{} WHERE id = ?1", TASK_SELECT),
@@ -985,13 +970,7 @@ impl Database {
     }
 
     pub async fn count_available_tasks_for_role(&self, role: &str) -> Result<usize, tokio_rusqlite::Error> {
-        let target_status = match role {
-            "coder"       => "backlog",
-            "reviewer"    => "in_review",
-            "tester"      => "testing",
-            "docs_writer" => "docs_needed",
-            _ => return Ok(0),
-        }.to_string();
+        let target_status = role.to_string();
         self.conn.call(move |conn| {
             let count: i64 = conn.query_row(
                 "SELECT COUNT(*) FROM tasks t \

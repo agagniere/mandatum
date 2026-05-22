@@ -2,6 +2,7 @@
 JAVASCRIPT_RUNTIME    ?= npm
 MANDATUM_TARGET_REPO  ?= $(shell pwd)
 
+CARGO      := cargo
 JS_INSTALL := $(JAVASCRIPT_RUNTIME) install
 # Deno users would override this one with deno task build
 JS_BUILD   := $(JAVASCRIPT_RUNTIME) run build
@@ -21,7 +22,7 @@ build: build-server build-ui
 	@echo "Build complete ✅"
 
 build-server: | server/Cargo.toml
-	cargo build --release --manifest-path $|
+	$(CARGO) build --release --manifest-path $|
 
 build-ui:
 	cd ui && $(JS_INSTALL) && $(JS_BUILD)
@@ -59,5 +60,5 @@ proxy:
 
 # Clean build artifacts
 clean:
-	cd server && cargo clean
+	cd server && $(CARGO) clean
 	cd ui && $(RM) -r dist node_modules

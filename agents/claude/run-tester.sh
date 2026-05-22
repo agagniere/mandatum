@@ -92,8 +92,8 @@ Do not call register_agent, get_next_task, create_branch, or setup_worktree for 
 Run tests and make any necessary test-related commits in "$worktree_dir".
 Call record_commit for any commits you make.
 Call set_output_path for the main test file or files you touched.
-If tests pass, call update_task_status with status "docs_needed" and a concise summary.
-If tests fail, call update_task_status with status "in_progress" and the failure details.
+If tests pass, call update_task_status with status "${MANDATUM_SUCCESS_STATUS:-docs_writer}" and a concise summary.
+If tests fail, call update_task_status with status "${MANDATUM_FAILURE_STATUS:-coder}" and the failure details.
 Call heartbeat while working.
 EOF
 )"

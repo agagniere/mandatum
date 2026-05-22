@@ -38,7 +38,8 @@ impl Spawner {
     }
 
     async fn check_and_spawn(&self) {
-        for role in ["coder", "reviewer", "tester", "docs_writer"] {
+        let roles: Vec<String> = self.config.agents.iter().map(|a| a.role.clone()).collect();
+        for role in roles.iter().map(|s| s.as_str()) {
             let max = self.config.max_concurrent_for_role(role);
             let running = *self
                 .running_per_role
@@ -67,10 +68,7 @@ impl Spawner {
         let short_id = &Uuid::new_v4().to_string()[..8].to_string();
         let agent_id = format!("{}-{}", role, short_id);
 
-        let script_name = match role {
-            "docs_writer" => "run-docs.sh".to_string(),
-            r => format!("run-{}.sh", r),
-        };
+        let script_name = format!("run-{}.sh", role);
         let script_path = PathBuf::from(&self.config.agents_dir)
             .join(&agent_type)
             .join(&script_name);
@@ -131,6 +129,8 @@ impl Spawner {
                 &additional,
                 model.as_deref(),
                 effort.as_deref(),
+                self.config.success_for(role),
+                self.config.failure_for(role),
             ) {
                 Ok(c) => c,
                 Err(e) => {
@@ -154,6 +154,12 @@ impl Spawner {
                 }
                 if let Some(ref e) = effort {
                     c.env("MANDATUM_EFFORT", e);
+                }
+                if let Some(s) = self.config.success_for(role) {
+                    c.env("MANDATUM_SUCCESS_STATUS", s);
+                }
+                if let Some(f) = self.config.failure_for(role) {
+                    c.env("MANDATUM_FAILURE_STATUS", f);
                 }
                 c
             }
@@ -269,6 +275,8 @@ fn build_docker_command(
     additional: &str,
     model: Option<&str>,
     effort: Option<&str>,
+    success_status: Option<&str>,
+    failure_status: Option<&str>,
 ) -> Result<Command, std::io::Error> {
     let agents_dir_abs = std::fs::canonicalize(&config.agents_dir)?;
     let project_dir_abs = std::fs::canonicalize(project_dir)?;
@@ -341,6 +349,12 @@ fn build_docker_command(
     }
     if let Some(e) = effort {
         cmd.args(["-e", &format!("MANDATUM_EFFORT={e}")]);
+    }
+    if let Some(s) = success_status {
+        cmd.args(["-e", &format!("MANDATUM_SUCCESS_STATUS={s}")]);
+    }
+    if let Some(f) = failure_status {
+        cmd.args(["-e", &format!("MANDATUM_FAILURE_STATUS={f}")]);
     }
     // Always point the container at the host-side reverse proxy. Container
     // networking can't reach VPN-routed gateways directly, so claude calls

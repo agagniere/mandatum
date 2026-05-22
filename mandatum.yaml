@@ -18,21 +18,36 @@ max_concurrent: 5
 
 # caveman: instruct agents to respond tersely (drops filler, articles, pleasantries).
 # Reduces token usage. Override per role with a caveman field under that role.
-caveman: true
+caveman: false
 
+# agents: ordered list of pipeline roles.
+# The list order defines the board column order.
+# Each role's status IS its name — tasks move between roles via the transition fields.
+# Terminals are 'done' and 'blocked' (always present; not listed here).
 agents:
-  coder:
+  - role: coder
     type: claude        # "claude" or "codex"
+    transition:
+      success: reviewer
+      failure: blocked
     additional_instructions: ""
 
-  reviewer:
+  - role: reviewer
     type: claude
+    transition:
+      success: tester
+      failure: coder
     additional_instructions: ""
 
-  tester:
+  - role: tester
     type: claude
+    transition:
+      success: docs_writer
+      failure: coder
     additional_instructions: ""
 
-  docs_writer:
+  - role: docs_writer
     type: claude
+    transition:
+      success: done
     additional_instructions: ""

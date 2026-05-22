@@ -28,6 +28,6 @@ trap cleanup INT TERM
 "$SCRIPT_DIR/run-coder.sh"    "coder-1"    "$PROJECT_DIR" 2>&1 | sed 's/^/[coder]    /' &
 "$SCRIPT_DIR/run-reviewer.sh" "reviewer-1" "$PROJECT_DIR" 2>&1 | sed 's/^/[reviewer] /' &
 "$SCRIPT_DIR/run-tester.sh"   "tester-1"   "$PROJECT_DIR" 2>&1 | sed 's/^/[tester]   /' &
-"$SCRIPT_DIR/run-docs.sh"     "docs-1"     "$PROJECT_DIR" 2>&1 | sed 's/^/[docs]     /' &
+"$SCRIPT_DIR/run-docs_writer.sh"     "docs-1"     "$PROJECT_DIR" 2>&1 | sed 's/^/[docs]     /' &
 
 wait

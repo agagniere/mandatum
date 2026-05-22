@@ -69,16 +69,29 @@ agents_dir: agents                    # path to agents/ scripts directory
 max_concurrent: 5   # max agents per role running simultaneously
 caveman: true       # terse agent responses — reduces token usage
 
+# agents: ordered list of pipeline roles.
+# The list order defines the board column order.
+# Each role's name is its queue status — tasks move between roles via transitions.
 agents:
-  coder:
+  - role: coder
     type: claude    # "claude" or "codex"
-    additional_instructions: ""
-  reviewer:
+    transition:
+      success: reviewer
+      failure: blocked
+  - role: reviewer
     type: claude
-  tester:
+    transition:
+      success: tester
+      failure: coder
+  - role: tester
     type: claude
-  docs_writer:
+    transition:
+      success: docs_writer
+      failure: coder
+  - role: docs_writer
     type: claude
+    transition:
+      success: done
 ```
 
 ### 2. Build and run
@@ -181,19 +194,32 @@ project_dir: .           # git repo agents work in; --repo CLI flag overrides
 agents_dir: agents       # path to agents/ directory
 max_concurrent: 5        # global max agents per role (default: 5)
 caveman: true            # terse response mode — drops filler, reduces tokens (default: true)
+model: sonnet            # global default claude model (optional)
+effort: medium           # global default effort level (optional)
 
+# agents: ordered list defining the pipeline and board column order.
+# Terminals 'backlog', 'done', and 'blocked' are always present — don't list them.
 agents:
-  coder:
+  - role: coder
     type: claude                      # "claude" or "codex"
+    transition:
+      success: reviewer               # status set on success
+      failure: blocked                # status set on failure (omit to stay in role)
     additional_instructions: ""       # appended to every agent prompt for this role
     max_concurrent: 3                 # override global max for this role
     caveman: false                    # override global caveman setting for this role
-  reviewer:
+    model: opus                       # override global model for this role
+    effort: high                      # override global effort for this role
+  - role: reviewer
     type: codex
-  tester:
+    transition:
+      success: tester
+      failure: coder
+  - role: tester
     type: claude
-  docs_writer:
-    type: claude
+    transition:
+      success: done
+      failure: coder
 ```
 
 ### Sandboxed agents (Docker)
@@ -268,10 +294,10 @@ The spawner handles agent lifecycle automatically when `mandatum.yaml` is config
 agents/claude/run-all.sh /path/to/your/project
 
 # Individual roles
-agents/claude/run-coder.sh    [agent-id] [project-dir]
-agents/claude/run-reviewer.sh [agent-id] [project-dir]
-agents/claude/run-tester.sh   [agent-id] [project-dir]
-agents/claude/run-docs.sh     [agent-id] [project-dir]
+agents/claude/run-coder.sh       [agent-id] [project-dir]
+agents/claude/run-reviewer.sh    [agent-id] [project-dir]
+agents/claude/run-tester.sh      [agent-id] [project-dir]
+agents/claude/run-docs_writer.sh [agent-id] [project-dir]
 
 # Same scripts for Codex
 agents/codex/run-coder.sh     [agent-id] [project-dir]
@@ -318,16 +344,18 @@ Open **http://localhost:3001** — both the API and the UI are served from the s
 
 ## Git Workflow
 
-Each task maps to a git branch. The full lifecycle:
+Each task maps to a git branch. The full lifecycle with the default pipeline:
 
 ```
-backlog
-  → [coder]      in_progress  →  in_review
-  → [reviewer]   testing (approve) or back to backlog (request_changes)
-  → [tester]     docs_needed (pass) or in_progress (fail)
+backlog  (human assigns to coder)
+  → [coder]      reviewer  (request_review)
+  → [reviewer]   tester (approve_review) or coder (request_changes)
+  → [tester]     docs_writer (pass) or coder (fail)
   → [docs_writer] done
   → [server]     auto-merge into base branch (if --repo configured)
 ```
+
+The exact transitions are defined in `mandatum.yaml` — `request_review`, `approve_review`, and `request_changes` read the `transition.success` / `transition.failure` of the calling agent's role. The `backlog` column holds tasks that haven't entered the pipeline yet; drag a task into the first role's column (or set `assigned_role` at creation) to start it.
 
 ### Branch naming
 
@@ -389,6 +417,28 @@ JSON config:
 
 Legacy SSE clients: `http://localhost:3002/sse`
 
+### Extending agents with project-scoped plugins
+
+Mandatum's `--mcp-config` is merged with any MCP servers, plugins, skills, and slash commands enabled at project scope in the **target repo** (the one the agents work in). This applies in headless `--print` mode too, so plugins installed in the target repo are automatically available to every mandatum agent — no changes to mandatum needed.
+
+#### Example: integrating [Speky](https://github.com/agagniere/speky) for specifications
+
+In the target repo, install speky as a project-scoped plugin:
+
+```bash
+claude plugin marketplace add agagniere/speky --scope project
+claude plugin install speky@speky --scope project
+```
+
+This registers the plugin in `.claude/settings.json`. Commit the file so every contributor — and every mandatum agent worktree — picks it up. The plugin bundles:
+
+- Two MCP servers (`speky`, `speky-selfspec`) exposing the spec model as tools
+- Workflow skills that guide Claude through onboarding a project and writing test plans
+
+Once installed, every mandatum agent (planner, coder, reviewer, tester, docs writer) can query and update specs, and the skills will activate automatically when relevant. Projects without speky are unaffected — the plugin simply isn't enabled there.
+
+> **Prerequisite:** speky requires `uv` ≥ 0.8.0 on `PATH`.
+
 ---
 
 ## MCP Tools Reference
@@ -414,20 +464,15 @@ Legacy SSE clients: `http://localhost:3002/sse`
 | `setup_worktree` | all | Record worktree path; returns `git worktree add` commands |
 | `create_branch` | coder | Record branch name |
 | `record_commit` | coder, tester, docs | Record commit hash + message |
-| `request_review` | coder | Move to `in_review`; validates commit exists |
+| `request_review` | coder | Move to coder's `transition.success`; validates commit exists |
 | `get_review_target` | reviewer | Returns branch, commits, prior feedback |
-| `approve_review` | reviewer | Move to `testing` |
-| `request_changes` | reviewer | Keep in `in_review`; attach feedback for coder |
+| `approve_review` | reviewer | Move to reviewer's `transition.success` |
+| `request_changes` | reviewer | Move to reviewer's `transition.failure`; attach feedback |
 | `set_pr_url` | coder | Record PR/MR URL |
 
-### Role → queue status mapping
+### Role → queue status
 
-| Role | Claims from status |
-|------|--------------------|
-| `coder` | `backlog` |
-| `reviewer` | `in_review` |
-| `tester` | `testing` |
-| `docs_writer` | `docs_needed` |
+Each role's **name is its own queue status**. A task waiting for the `reviewer` role has `status = "reviewer"`. The `assigned_agent_id` field distinguishes a task being actively worked on from one waiting in the queue. Terminals `backlog`, `done`, and `blocked` are not roles.
 
 ---
 
@@ -435,7 +480,7 @@ Legacy SSE clients: `http://localhost:3002/sse`
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/info` | Server info (repo path, base branch) |
+| GET | `/api/info` | Server info: repo path, base branch, pipeline stage list |
 | GET | `/api/tasks` | List tasks (`?status=`, `?role=`, `?agent_id=`) |
 | GET | `/api/tasks/:id` | Task with full activity log and commits |
 | POST | `/api/tasks` | Create task |
@@ -468,7 +513,7 @@ Legacy SSE clients: `http://localhost:3002/sse`
 
 ## Stale Agent Detection
 
-The server resets tasks whose assigned agent hasn't sent a heartbeat in **10 minutes**, moving them back to their role's queue status. The background watchdog runs every 60 seconds.
+The server resets tasks whose assigned agent hasn't sent a heartbeat in **10 minutes**, moving them back to their role's queue status (the role name itself). The background watchdog runs every 60 seconds.
 
 Trigger manually:
 
