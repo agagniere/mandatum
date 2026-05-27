@@ -9,7 +9,7 @@ project_dir: .
 # Run in a container for sandboxing
 runtime: docker
 
-# agents_dir: path to the agents/ directory containing run-*.sh scripts.
+# agents_dir: path to the agents/ directory containing run-generic.sh.
 agents_dir: agents
 
 # max_concurrent: global default for how many agents can run per role simultaneously.
@@ -30,24 +30,27 @@ agents:
     transition:
       success: reviewer
       failure: blocked
-    additional_instructions: ""
+    prompt_name: coder
+    fetch_review_context: true
 
   - role: reviewer
     type: claude
     transition:
       success: tester
       failure: coder
-    additional_instructions: ""
+    prompt_name: reviewer
+    fetch_review_context: true
 
   - role: tester
     type: claude
     transition:
       success: docs_writer
       failure: coder
-    additional_instructions: ""
+    prompt_name: tester
 
   - role: docs_writer
     type: claude
     transition:
       success: done
-    additional_instructions: ""
+      failure: blocked
+    prompt_name: docs_writer

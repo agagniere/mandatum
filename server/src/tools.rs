@@ -410,8 +410,9 @@ async fn request_review(args: Value, ctx: &ToolContext) -> Result<Value, String>
         }
     }
 
-    let next_status = ctx.config.as_deref()
-        .and_then(|c| c.success_for("coder"))
+    let role = agent_role(&ctx.db, agent_id).await;
+    let next_status = role.as_deref()
+        .and_then(|r| ctx.config.as_deref().and_then(|c| c.success_for(r)))
         .unwrap_or("reviewer");
     let task = ctx.db.update_task(
         task_id, None, None, Some(next_status), None, None, None, None, None,
@@ -423,7 +424,6 @@ async fn request_review(args: Value, ctx: &ToolContext) -> Result<Value, String>
         .await.map_err(|e| e.to_string())?;
 
     info!(agent_id, task_id, commit = ?commit_hash, "review requested");
-    let role = agent_role(&ctx.db, agent_id).await;
     let detail = match commit_hash {
         Some(h) => format!("{} (commit: {})", note, &h[..h.len().min(8)]),
         None => note.to_string(),
@@ -496,8 +496,9 @@ async fn approve_review(args: Value, ctx: &ToolContext) -> Result<Value, String>
     let task_id = args["task_id"].as_str().ok_or("Missing task_id")?;
     let comment = args["comment"].as_str().unwrap_or("LGTM");
 
-    let next_status = ctx.config.as_deref()
-        .and_then(|c| c.success_for("reviewer"))
+    let role = agent_role(&ctx.db, agent_id).await;
+    let next_status = role.as_deref()
+        .and_then(|r| ctx.config.as_deref().and_then(|c| c.success_for(r)))
         .unwrap_or("tester");
     let task = ctx.db.update_task(
         task_id, None, None, Some(next_status), None, None, None, None, None,
@@ -508,7 +509,6 @@ async fn approve_review(args: Value, ctx: &ToolContext) -> Result<Value, String>
     ctx.db.clear_agent_current_task_if_matches(agent_id, task_id)
         .await.map_err(|e| e.to_string())?;
 
-    let role = agent_role(&ctx.db, agent_id).await;
     let entry = ctx.db.add_activity(task_id, Some(agent_id), role.as_deref(), "approved",
         Some(comment)).await.map_err(|e| e.to_string())?;
 
@@ -538,8 +538,9 @@ async fn request_changes(args: Value, ctx: &ToolContext) -> Result<Value, String
         })
         .unwrap_or(0);
 
-    let failure_role = ctx.config.as_deref()
-        .and_then(|c| c.failure_for("reviewer"))
+    let role = agent_role(&ctx.db, agent_id).await;
+    let failure_role = role.as_deref()
+        .and_then(|r| ctx.config.as_deref().and_then(|c| c.failure_for(r)))
         .unwrap_or("coder");
     let (new_status, new_role, message) = if prior_rejections >= MAX_REVIEW_CYCLES {
         (
@@ -568,7 +569,6 @@ async fn request_changes(args: Value, ctx: &ToolContext) -> Result<Value, String
     ctx.db.clear_agent_current_task(agent_id)
         .await.map_err(|e| e.to_string())?;
 
-    let role = agent_role(&ctx.db, agent_id).await;
     let action = if new_status == "blocked" { "blocked" } else { "changes_requested" };
     let entry = ctx.db.add_activity(task_id, Some(agent_id), role.as_deref(), action,
         Some(feedback)).await.map_err(|e| e.to_string())?;

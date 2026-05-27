@@ -24,6 +24,15 @@ pub struct AgentRoleConfig {
     pub effort: Option<String>,
     #[serde(default)]
     pub transition: Transition,
+    /// Inline role prompt passed to run-generic.sh as MANDATUM_ROLE_PROMPT.
+    /// Takes priority over prompt_name. Supports $MANDATUM_SUCCESS_STATUS /
+    /// $MANDATUM_FAILURE_STATUS substitution.
+    pub prompt: Option<String>,
+    /// Name of a prompt file at {agents_dir}/prompt_{name}.txt.
+    /// Ignored when prompt is also set.
+    pub prompt_name: Option<String>,
+    /// Pre-fetch changes_requested activity and inject as review context before calling Claude.
+    pub fetch_review_context: Option<bool>,
 }
 
 fn default_agent_type() -> String { "claude".to_string() }
@@ -118,5 +127,15 @@ impl MandatumConfig {
         self.role_config(role)
             .and_then(|a| a.effort.clone())
             .or_else(|| self.effort.clone())
+    }
+
+    pub fn prompt_for_role(&self, role: &str) -> Option<&str> {
+        self.role_config(role).and_then(|a| a.prompt.as_deref())
+    }
+
+    pub fn fetch_review_context_for_role(&self, role: &str) -> bool {
+        self.role_config(role)
+            .and_then(|a| a.fetch_review_context)
+            .unwrap_or(false)
     }
 }

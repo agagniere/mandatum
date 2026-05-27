@@ -37,6 +37,29 @@ impl Spawner {
         }
     }
 
+    fn resolve_prompt(&self, role: &str) -> String {
+        let rc = match self.config.role_config(role) {
+            Some(rc) => rc,
+            None => return String::new(),
+        };
+        if let Some(inline) = &rc.prompt {
+            return inline.clone();
+        }
+        if let Some(name) = &rc.prompt_name {
+            let path = PathBuf::from(&self.config.agents_dir)
+                .join(format!("prompt_{}.txt", name));
+            match std::fs::read_to_string(&path) {
+                Ok(content) => return content,
+                Err(e) => tracing::warn!(
+                    "Cannot read prompt file {}: {}",
+                    path.display(),
+                    e
+                ),
+            }
+        }
+        String::new()
+    }
+
     async fn check_and_spawn(&self) {
         let roles: Vec<String> = self.config.agents.iter().map(|a| a.role.clone()).collect();
         for role in roles.iter().map(|s| s.as_str()) {
@@ -68,7 +91,7 @@ impl Spawner {
         let short_id = &Uuid::new_v4().to_string()[..8].to_string();
         let agent_id = format!("{}-{}", role, short_id);
 
-        let script_name = format!("run-{}.sh", role);
+        let script_name = "run-generic.sh".to_string();
         let script_path = PathBuf::from(&self.config.agents_dir)
             .join(&agent_type)
             .join(&script_name);
@@ -118,6 +141,8 @@ impl Spawner {
 
         let model = self.config.model_for_role(role);
         let effort = self.config.effort_for_role(role);
+        let role_prompt = self.resolve_prompt(role);
+        let fetch_review_context = self.config.fetch_review_context_for_role(role);
 
         let mut cmd = match self.config.runtime.as_str() {
             "docker" => match build_docker_command(
@@ -131,6 +156,9 @@ impl Spawner {
                 effort.as_deref(),
                 self.config.success_for(role),
                 self.config.failure_for(role),
+                role,
+                &role_prompt,
+                fetch_review_context,
             ) {
                 Ok(c) => c,
                 Err(e) => {
@@ -146,9 +174,14 @@ impl Spawner {
                 let mut c = Command::new("bash");
                 c.arg(&script_path)
                     .env("AGENT_ID", &agent_id)
+                    .env("MANDATUM_ROLE", role)
                     .env("PROJECT_DIR", &project_dir)
                     .env("MANDATUM_ONCE", "1")
-                    .env("ADDITIONAL_INSTRUCTIONS", &additional);
+                    .env("ADDITIONAL_INSTRUCTIONS", &additional)
+                    .env("MANDATUM_ROLE_PROMPT", &role_prompt);
+                if fetch_review_context {
+                    c.env("MANDATUM_FETCH_REVIEW_CONTEXT", "1");
+                }
                 if let Some(ref m) = model {
                     c.env("MANDATUM_MODEL", m);
                 }
@@ -277,6 +310,9 @@ fn build_docker_command(
     effort: Option<&str>,
     success_status: Option<&str>,
     failure_status: Option<&str>,
+    role: &str,
+    role_prompt: &str,
+    fetch_review_context: bool,
 ) -> Result<Command, std::io::Error> {
     let agents_dir_abs = std::fs::canonicalize(&config.agents_dir)?;
     let project_dir_abs = std::fs::canonicalize(project_dir)?;
@@ -302,6 +338,10 @@ fn build_docker_command(
         "MANDATUM_ONCE=1",
         "-e",
         &format!("ADDITIONAL_INSTRUCTIONS={additional}"),
+        "-e",
+        &format!("MANDATUM_ROLE={role}"),
+        "-e",
+        &format!("MANDATUM_ROLE_PROMPT={role_prompt}"),
         "-e",
         "MANDATUM_REST_URL=http://host.docker.internal:3001",
         "-e",
@@ -355,6 +395,9 @@ fn build_docker_command(
     }
     if let Some(f) = failure_status {
         cmd.args(["-e", &format!("MANDATUM_FAILURE_STATUS={f}")]);
+    }
+    if fetch_review_context {
+        cmd.args(["-e", "MANDATUM_FETCH_REVIEW_CONTEXT=1"]);
     }
     // Always point the container at the host-side reverse proxy. Container
     // networking can't reach VPN-routed gateways directly, so claude calls
